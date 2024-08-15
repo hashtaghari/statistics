@@ -1,0 +1,233 @@
+/*
+ * CSS for learning levels experiment.
+
+/* Main learning stimulus */
+#learning-stimulus {
+  position: absolute;
+  margin: auto;
+  display: block;
+  opacity: 1;
+  top: 8%; 
+  left: 50%;
+  transform: translate(-50%, -8%);
+}
+
+/* Choice options */
+.choice-grid {
+  display: grid;
+  position: absolute;
+  grid-template-columns: 50% 50%;
+  grid-template-rows: 1;
+  top: 150%;
+  left: 50%;
+  transform: translate(-50%, -150%);
+  height: 60vh;
+  width: 60vw;
+  margin: 0;
+  padding: 0;
+}
+
+/* choice option container */
+.choice-option {
+  display: grid;
+  position: relative;
+  margin: 0 auto;
+  width: 30%;
+}
+
+.choice-option-img[stage="1"]  {
+  position: absolute;
+  width: 100%;
+  opacity: 90%;
+}
+
+.choice-option-img[stage="selected"]  {
+  position: absolute;
+  width: 100%;
+  opacity: 100%;
+  border-color: grey;
+  border-width: 5px;
+  border-style: dashed;
+  border-radius: 3px;
+  animation: pulse;
+  animation-duration: 500ms;
+  animation-iteration-count: 1;
+  animation-fill-mode: forwards;
+}
+
+.choice-option-img[stage="not selected"]  {
+  position: absolute;
+  width: 100%;
+  opacity: 10%;
+}
+
+.choice-option-img[stage="instructions"]  {
+  position: absolute;
+  width: 100%;
+}
+
+.choice-option-text {
+  position: absolute;
+  left: 50%;
+  top: -10%;
+  transform: translate(-50%, -50%);
+  font-size: 18px;
+  font-weight: bold;
+}
+
+
+.choice-instructions-grid {
+  display: grid;
+  grid-template-columns: 50% 50%;
+  grid-template-rows: 1;
+  position: relative;
+  top: 10%;
+  height: 50vh;
+  width: 60vw;
+  margin: 0 auto;
+  padding: 0;
+}
+
+
+/* instructions container */
+.instrutions-wrap{
+  height: 100vh;
+  width: 100vw;
+  max-width:100%;
+  margin: 0px;
+  padding: 0px;
+}
+
+.learning-instructions-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  height: 50vh;
+  width: 60vw;
+  max-width: 95%;
+  -webkit-transform: translate3d(-50%, -50%, 0);
+  transform: translate3d(-50%, -50%, 0);
+  text-align: center;
+  font-size: 20px;
+  line-height: 1.5;
+}
+
+.learning-instructions-button {
+  position: absolute; 
+  bottom: 100px; 
+  left: 50%;
+  transform: translate(-50%, 0);
+}
+
+/* feedback text */
+#feedback {
+  font-size: 50px;
+}
+
+#feedback.grey_pos {
+  position: absolute;
+  text-align: center;
+  color: grey;
+  padding: 10px;
+  display: inline-block;
+  border-color: red;
+  border-width:medium; 
+  border-style:solid; 
+}
+
+#feedback.grey_neg {
+  position: absolute;
+  text-align: center;
+  color: grey;
+  padding: 10px;
+  display: inline-block;
+  border-color: green;
+  border-width:medium; 
+  border-style:solid; 
+}
+
+#feedback.red {
+  position: absolute;
+  text-align: center;
+  color: red;
+  font-weight: bolder;
+}
+
+#feedback.green {
+  position: absolute;
+  text-align: center;
+  color: green;
+  font-weight: bolder;
+}
+
+
+
+.coin[stage="start"] {
+  position: absolute;
+  margin: auto;
+}
+
+.coin[type = "A"] {
+  top: 5%;
+  left: 5%;
+  transform: translate(-5%, -5%);
+}
+
+.coin[type = "B"] {
+  top: 5%;
+  right: 5%;
+  transform: translate(5%, -5%);
+}
+
+.coin[type = "C"] {
+  bottom: 5%;
+  left: 5%;
+  transform: translate(-5%, 5%);
+}
+
+.coin[type = "D"] {
+  bottom: 5%;
+  right: 5%;
+  transform: translate(5%, 5%);
+}
+
+
+.coin[stage="win"]{
+  position: absolute;
+  margin: auto;
+  opacity: 1;
+  border: grey;
+  animation: tada;
+  animation-duration: 500ms;
+  animation-iteration-count: 2;
+  animation-fill-mode: forwards;
+}
+
+.coin[stage="lose"]{
+  position: absolute;
+  margin: auto;
+  opacity: 1;
+  border: grey;
+  animation: hinge;
+  animation-duration: 500ms;
+  animation-iteration-count: 1;
+  animation-fill-mode: forwards;
+}
+
+.coin[stage="avoid"]{
+  position: absolute;
+  margin: auto;
+  opacity: 50%;
+  border: grey;
+}
+
+
+
+/* get rid of pinterest */
+.sw-pinit-button,
+div.sw-pinit a.sw-pinit-button:hover:before {
+    display: none;
+} 
+
+
+

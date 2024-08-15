@@ -1,0 +1,1426 @@
+---
+title: 'Memory Specificity Analyses: Experiment 1'
+author: "Kate Nussenbaum"
+date: "11/13/23"
+output: 
+  html_document:
+    df_print: paged
+    theme: flatly
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+---
+
+```{=html}
+<style type="text/css">
+h1.title {
+font-size: 38px;
+}
+h1 { /* Header 1 */
+font-size: 28px;
+}
+h2 { /* Header 2 */
+font-size: 22px;
+}
+h3 { /* Header 3 */
+font-size: 18px;
+}
+
+</style>
+```
+
+------------------------------------------------------------------------
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F, cache = F)
+knitr::opts_chunk$set(fig.path = "figures/")
+knitr::opts_chunk$set(fig.height = 4, dpi = 600)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+
+```{r load needed libraries}
+library(tidyverse)
+library(glue)
+library(afex)
+library(ggpubr)
+library(pander)
+library(sjPlot)
+library(see)
+library(latex2exp)
+library(pROC)
+```
+
+```{r define functions}
+scale_this <- function(x){
+  (x - mean(x, na.rm=TRUE)) / sd(x, na.rm=TRUE)
+}
+
+se <- function(x){
+    sd(x, na.rm = T)/sqrt(length(x))
+}
+```
+
+```{r plot theme}
+
+#define colors to use for plots
+color4 =  "#d94f70"
+color5 = "#f88f58"
+color3 = "#45b5aa"
+color1 = "#FFCA4B"
+color2 = "#6364a5"
+
+#define plotting theme
+mem_theme <- theme(panel.background = element_rect(fill='transparent'),
+                   axis.line = element_line(color='black'),
+                   panel.border = element_rect(color = 'black', fill = "transparent"),
+                   panel.grid.minor = element_line(color='transparent'),
+                   axis.title.x = element_text(size=16, vjust=-.25),
+                   axis.title.y = element_text(size=16, vjust=1),
+                   axis.text.x = element_text(size=12, colour="black"),
+                   axis.text.y = element_text(size=12, colour="black"),
+                   legend.text=element_text(size=12),
+                   legend.title = element_text(size = 14),
+                   plot.title = element_text(size=16, face = "bold", hjust = .5), 
+                   strip.text.x = element_text(size=12), 
+                   strip.text.y = element_text(size=12), 
+                   strip.background = element_rect(colour= "black", fill = "transparent"))
+```
+
+# Import and process data 
+```{r import age data}
+
+#read in subject ages
+sub_ages <- read_csv(glue('data/e1_sub_ages.csv')) 
+
+#create list of all included subjects with subject ids, age, age group
+subject_list <- sub_ages %>%
+    mutate(age = as.numeric(age)) %>%
+    mutate(age_group = case_when(age < 13 ~ "Children",
+                                 age >= 13 & age < 18 ~ "Adolescents",
+                                 age >= 18 ~ "Adults")) %>%
+    mutate(age_group = factor(age_group, levels = c("Children", "Adolescents", "Adults")))
+
+```
+
+```{r import and format learning data}
+learning_data <- read_csv('data/e1_learning_data.csv') %>%
+    mutate(reward_condition = as.factor(case_when(block_condition == 1 ~ "Category-Predictive",
+                                        block_condition == 2 ~ "Exemplar-Predictive"))) %>%
+    group_by(subject_id, task_block, stimulus) %>% 
+    mutate(stimulus_repetition = rank(trial_index)) %>%
+    ungroup() %>%
+    mutate(correct_response = case_when(block_condition == "1" & cat_type == "good" ~ "1",
+                                        block_condition == "1" & cat_type == "bad" ~ "0",
+                                        block_condition == "1" & cat_type == "neutral" ~ "0",
+                                        block_condition == "2" & approach_reward > 0 ~ "1",
+                                        block_condition == "2" & approach_reward < 0 ~ "0"),
+           correct_response_made = case_when(key_press == correct_response ~ 1,
+                                             key_press != correct_response ~ 0))
+
+#add within-block trial and within-condition block order
+learning_data <- learning_data %>%
+    group_by(subject_id, task_block) %>%
+    mutate(learning_trial = rank(trial_index)) %>%
+    ungroup() %>%
+    group_by(subject_id, block_condition) %>%
+    mutate(within_condition_block_num = as.numeric(factor(rank(block_order))))
+
+# add age
+learning_data <- full_join(learning_data, subject_list, by = c('subject_id'))
+
+#factor subject id
+learning_data$subject_id <- factor(learning_data$subject_id)
+```
+
+# Learning
+## Model: Correct responses by age, trial, block number, and block condition
+```{r fit correct response regression}
+
+#filter data
+learning_cr_model_data <- learning_data %>%
+    filter(block_condition == "2" | cat_type != "neutral") %>%
+    filter(rt > 0) %>%
+    select(correct_response_made, age, learning_trial, reward_condition, block_order, within_condition_block_num, subject_id) %>%
+    drop_na()
+
+#scale variables
+learning_cr_model_data$age_scaled <- scale_this(learning_cr_model_data$age)
+learning_cr_model_data$learning_trial_scaled <- scale_this(learning_cr_model_data$learning_trial)
+learning_cr_model_data$block_number_scaled <- scale_this(learning_cr_model_data$within_condition_block_num)
+
+#run model
+learning_cr_model <- mixed(correct_response_made ~ age_scaled * learning_trial_scaled * reward_condition * block_number_scaled + (learning_trial_scaled * reward_condition * block_number_scaled || subject_id),
+                           data = learning_cr_model_data,
+                           family = "binomial",
+                           method = "LRT",
+                           expand_re = T,
+                           control = glmerControl(optimizer = "bobyqa"))
+nice(learning_cr_model)
+
+# significant effects of:
+# age
+# trial
+# block condition
+# block number
+# age x trial
+# age x block condition
+# trial x block condition
+# trial x block number
+# block condition x block number
+# age x trial x block condition
+```
+
+```{r display learning model}
+learning_cr_model.glmer <- mixed(correct_response_made ~ age_scaled * learning_trial_scaled * reward_condition * block_number_scaled + (learning_trial_scaled * reward_condition * block_number_scaled || subject_id),
+                           data = learning_cr_model_data,
+                           family = "binomial",
+                           method = "LRT",
+                           expand_re = T,
+                           control = glmerControl(optimizer = "bobyqa"),
+                           return = "merMod")
+
+tab_model(learning_cr_model.glmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+## Figure 2A: Correct response by block condition, stimulus repetition, and age group
+```{r plot learning by age group}
+
+# Plot correct response as a function of reward condition and stimulus repetition 
+correct_response_summary_sub <- learning_data %>%
+    filter(block_condition == "2" | cat_type != "neutral") %>%
+    filter(rt > 0) %>%
+    group_by(reward_condition, stimulus_repetition, subject_id, age_group) %>%
+    summarize(mean_correct = mean(correct_response_made, na.rm = T))
+
+correct_response_summary <- correct_response_summary_sub  %>%
+    group_by(reward_condition, stimulus_repetition, age_group) %>%
+    summarize(group_mean_correct = mean(mean_correct, na.rm = T),
+              se_correct = se(mean_correct))
+
+#group means
+correct_response_plot <- ggplot(correct_response_summary, 
+                                    aes(x = stimulus_repetition, 
+                                        color = reward_condition,
+                                        y = group_mean_correct)) +
+    facet_grid(cols = vars(age_group)) +
+    geom_point() +
+    geom_line() +
+    geom_errorbar(aes(ymin = group_mean_correct - se_correct, ymax = group_mean_correct + se_correct), 
+                  width = .1) + 
+    xlab("Stimulus Repetition") +
+    ylab("Proportion of Correct Responses") +
+    scale_color_manual(values = c(color1, color2),
+                       name = "Block Condition") + 
+    geom_hline(yintercept = .5, linetype = "dashed") +
+    scale_y_continuous(breaks = c(.5, .7, .9)) +
+    mem_theme +
+    theme(legend.position = "top")
+correct_response_plot
+```
+
+
+## Supplementary Figure: Correct response by block condition and block number 
+```{r plot learning by block number}
+
+# Plot correct response as a function of reward condition and stimulus repetition 
+correct_response_summary_sub <- learning_data %>%
+    filter(block_condition == "2" | cat_type != "neutral") %>%
+    filter(rt > 0) %>%
+    group_by(within_condition_block_num, reward_condition, subject_id,) %>%
+    summarize(mean_correct = mean(correct_response_made, na.rm = T))
+
+correct_response_summary <- correct_response_summary_sub  %>%
+    group_by(within_condition_block_num, reward_condition) %>%
+    summarize(group_mean_correct = mean(mean_correct, na.rm = T),
+              se_correct = se(mean_correct))
+
+#group means
+correct_response_plot <- ggplot(correct_response_summary_sub, 
+                                    aes(x = factor(within_condition_block_num), 
+                                        fill = reward_condition,
+                                        y = mean_correct)) +
+    geom_boxplot(alpha = .7) + 
+    xlab("Block Number") +
+    ylab("Proportion of Correct Responses") +
+    scale_fill_manual(values = c(color1, color2),
+                       name = "Block Condition") +
+    geom_hline(yintercept = .5, linetype = "dashed") +
+    mem_theme +
+    theme(legend.position = "none")
+correct_response_plot
+```
+
+
+## Figure 2B: Generalization by block condition, category repetition, age group
+```{r plot generalization by age group}
+
+# add category to learning data frame
+learning_data <- learning_data %>%
+    separate(stimulus,
+             into = c(NA, "image"),
+             sep = "/") %>%
+    mutate(stim_num = parse_number(image)) %>%
+    separate(image,
+             into = c("category", NA),
+             sep = "([12345678])",
+             remove=FALSE)
+
+# determine category repetition number
+learning_data <- learning_data %>%
+    group_by(subject_id, task_block, category, age_group) %>%
+    mutate(category_rep = rank(trial_index))
+
+# determine correct responses as a function of stimulus rep and category rep
+correct_response_category_rep <- learning_data %>%
+    filter(block_condition == "2" | cat_type != "neutral") %>%
+    filter(rt > 0) %>%
+    group_by(reward_condition, stimulus_repetition, category_rep, age_group) %>%
+    summarize(group_mean_correct = mean(correct_response_made, na.rm = T),
+              se_correct = se(correct_response_made))  %>%
+    filter(stimulus_repetition == 1)
+
+#plot
+correct_response_category_rep_plot <- ggplot(correct_response_category_rep, 
+                                aes(x = category_rep,
+                                    color = reward_condition,
+                                    y = group_mean_correct)) +
+    facet_grid(cols = vars(age_group)) +
+    geom_point() +
+    geom_smooth(method = "lm", aes(fill = reward_condition)) +
+    geom_errorbar(aes(ymin = group_mean_correct - se_correct, ymax = group_mean_correct + se_correct), 
+                  width = .1) + 
+    xlab("Category Repetition") +
+    ylab("Correct Responses to 1st Stim.") +
+    scale_color_manual(values = c(color1, color2),
+                       name = "Block Condition") + 
+        scale_fill_manual(values = c(color1, color2),
+                       name = "Block Condition") + 
+    geom_hline(yintercept = .5, linetype = "dashed") +
+    mem_theme  +
+    theme(legend.position = "top")
+correct_response_category_rep_plot
+```
+
+
+## Model: Correct response to first appearance of each stimulus
+```{r fit generalization model}
+cr_first_rep_data  <- learning_data %>%
+    filter(block_condition == "2" | cat_type != "neutral") %>%
+    filter(rt > 0) %>%
+    select(correct_response_made, age, category_rep, reward_condition, within_condition_block_num, subject_id, stimulus_repetition) %>%
+    filter(stimulus_repetition == 1) %>%
+    drop_na()
+
+#scale variables
+cr_first_rep_data$age_scaled <- scale_this(cr_first_rep_data$age)
+cr_first_rep_data$category_rep_scaled <- scale_this(cr_first_rep_data$category_rep)
+cr_first_rep_data$block_number_scaled <- scale_this(cr_first_rep_data$within_condition_block_num)
+
+#run model
+cr_first_rep_model <- mixed(correct_response_made ~ age_scaled * category_rep_scaled * reward_condition * block_number_scaled + (block_number_scaled * reward_condition || subject_id),
+                           data = cr_first_rep_data,
+                           family = "binomial",
+                           method = "LRT",
+                           expand_re = T,
+                           control = glmerControl(optimizer = "bobyqa"))
+nice(cr_first_rep_model)
+
+# with full random effects: singular fit
+# removed interactions between random slope: still singular fit
+# removed block number random slope: still singular fit
+# removed category rep random slope, put block number and interaction back in: converges
+
+# Significant effects of:
+# age
+# category rep
+# block condition
+# block number
+# age x category rep
+# age x block condition
+# category rep x block condition
+# category rep x block number
+# block condition x block number
+# age x category rep x block condition
+# category rep x block condition x block number
+```
+
+```{r display generalization model}
+
+cr_first_rep_model.glmer <- mixed(correct_response_made ~ age_scaled * category_rep_scaled * reward_condition * block_number_scaled + (block_number_scaled * reward_condition || subject_id),
+                           data = cr_first_rep_data,
+                           family = "binomial",
+                           method = "LRT",
+                           expand_re = T,
+                           control = glmerControl(optimizer = "bobyqa"),
+                           return = "merMod")
+
+tab_model(cr_first_rep_model.glmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+
+## Supplementary Figure: Generalization by  trial, reward condition, and block number 
+```{r plot generalization by block number}
+
+# determine correct responses as a function of stimulus rep and category rep
+correct_response_category_rep <- learning_data %>%
+    filter(block_condition == "2" | cat_type != "neutral") %>%
+    filter(rt > 0) %>%
+    group_by(reward_condition, stimulus_repetition, category_rep, within_condition_block_num) %>%
+    summarize(group_mean_correct = mean(correct_response_made, na.rm = T),
+              se_correct = se(correct_response_made))  %>%
+    filter(stimulus_repetition == 1)
+
+#plot
+correct_response_category_rep_plot <- ggplot(correct_response_category_rep, 
+                                aes(x = category_rep,
+                                    color = reward_condition,
+                                    y = group_mean_correct)) +
+    facet_grid(cols = vars(within_condition_block_num)) +
+    geom_point() +
+    geom_smooth(method = "lm", aes(fill = reward_condition)) +
+    geom_errorbar(aes(ymin = group_mean_correct - se_correct, ymax = group_mean_correct + se_correct), 
+                  width = .1) + 
+    xlab("Category Repetition") +
+    ylab("Correct Responses to 1st Stim.") +
+    scale_color_manual(values = c(color1, color2),
+                       name = "Block Condition") +
+    scale_fill_manual(values = c(color1, color2),
+                       name = "Block Condition") +
+    geom_hline(yintercept = .5, linetype = "dashed") +
+    mem_theme +
+    theme(legend.position = "none")
+correct_response_category_rep_plot
+```
+
+## Figure 2C: WSLS by age group
+```{r plot WSLS by age group}
+
+#first determine prior response and prior reward to previous category appearance
+learning_data <- learning_data %>% 
+    group_by(subject_id, block_order, category) %>%
+    mutate(prior_cat_stim = lag(image), #previous stimulus
+           prior_cat_response = lag(key_press), #previous response
+           prior_cat_correct_response_made = lag(correct_response_made), #previous outcome (win or lose) 
+           category_stay = case_when(prior_cat_response == key_press ~ 1,
+                                prior_cat_response != key_press ~ 0),
+           same_stim = case_when(image == prior_cat_stim ~ 1,
+                                 image != prior_cat_stim ~ 0)) %>%
+    ungroup() %>%
+        mutate(WSLS = case_when(prior_cat_correct_response_made == 1 & category_stay == 1 ~ 1, 
+                            prior_cat_correct_response_made == 1 & category_stay == 0 ~ 0,
+                            prior_cat_correct_response_made == 0 & category_stay == 1 ~ 0, 
+                            prior_cat_correct_response_made == 0 & category_stay == 0 ~ 1))
+
+#determine win-stay lose shift behavior across age group and blocks
+win_stay_lose_shift <- learning_data %>%
+    filter(same_stim == 0) %>% #different stim only
+    mutate(trial_group = ntile(learning_trial, 3)) %>%
+    group_by(subject_id, age, age_group, reward_condition, trial_group) %>%
+    summarize(mean_WSLS = mean(WSLS, na.rm = T),
+              se_WSLS = se(WSLS)) %>%
+    drop_na()
+
+#plot
+WSLS_plot <- ggplot(win_stay_lose_shift, aes(x = trial_group, y = mean_WSLS, fill = reward_condition)) +
+    facet_grid(cols = vars(age_group)) +
+    geom_boxplot(data = filter(win_stay_lose_shift, trial_group == 1)) + 
+    geom_boxplot(data = filter(win_stay_lose_shift, trial_group == 2)) +
+    geom_boxplot(data = filter(win_stay_lose_shift, trial_group == 3)) +
+    scale_fill_manual(values = c(color1, color2),
+                      name = "Block Condition") + 
+    scale_color_manual(values = c(color1, color2),
+                      name = "Block Condition") + 
+    geom_hline(yintercept = .5, linetype = "dashed") +
+    xlab("Trial Group (17 trials)") +
+    ylab("Category Win-Stay Lose-Shift") +
+    scale_x_continuous(breaks = c(1, 2, 3), labels = c(1, 2, 3)) +
+    coord_cartesian(ylim = c(.3, 1)) +
+    mem_theme  +
+    theme(legend.position = "top")
+WSLS_plot 
+```
+
+## Supplementary Figure: WSLS by block number
+```{r WSLS plot with block number}
+
+#determine win-stay lose shift behavior across age group and blocks
+win_stay_lose_shift <- learning_data %>%
+    filter(same_stim == 0) %>% #different stim only
+    mutate(trial_group = floor(learning_trial/10 + 50/51)) %>%
+    group_by(subject_id, age, age_group, reward_condition, trial_group, within_condition_block_num) %>%
+    summarize(mean_WSLS = mean(WSLS, na.rm = T),
+              se_WSLS = se(WSLS)) %>%
+    drop_na()
+
+#plot
+WSLS_plot <- ggplot(win_stay_lose_shift, aes(x = factor(within_condition_block_num), y = mean_WSLS, fill = reward_condition)) +
+    geom_boxplot(alpha = .7) + 
+    scale_fill_manual(values = c(color1, color2),
+                      name = "Block Condition") + 
+    scale_color_manual(values = c(color1, color2),
+                      name = "Block Condition") + 
+    geom_hline(yintercept = .5, linetype = "dashed") +
+    xlab("Block Number") +
+    ylab("Category WSLS") +
+    mem_theme + 
+    theme(legend.position = "none")
+WSLS_plot 
+```
+
+
+## Model: Category win-stay lose-shift 
+```{r fit WSLS model}
+
+#determine win-stay lose shift behavior across age group and blocks
+wsls_model_data <- learning_data %>% 
+    filter(block_condition == "2" | cat_type != "neutral") %>%
+    filter(rt > 0) %>%
+    mutate(WSLS = case_when(prior_cat_correct_response_made == 1 & category_stay == 1 ~ 1, 
+                            prior_cat_correct_response_made == 1 & category_stay == 0 ~ 0,
+                            prior_cat_correct_response_made == 0 & category_stay == 1 ~ 0, 
+                            prior_cat_correct_response_made == 0 & category_stay == 0 ~ 1)) %>%
+    select(subject_id, age, WSLS, learning_trial, reward_condition, block_order, within_condition_block_num) %>%
+    drop_na() 
+
+#scale variables
+wsls_model_data$age_scaled <- scale_this(wsls_model_data$age)
+wsls_model_data$learning_trial_scaled <- scale_this(wsls_model_data$learning_trial)
+wsls_model_data$block_number_scaled <- scale_this(wsls_model_data$within_condition_block_num)
+
+#run model w/o block order for now
+wsls_model <- mixed(WSLS ~ age_scaled * learning_trial_scaled * reward_condition * block_number_scaled  + (reward_condition + block_number_scaled || subject_id),
+                    data = wsls_model_data,
+                    family = "binomial",
+                    method = "LRT",
+                    expand_re = T,
+                    control = glmerControl(optimizer = "bobyqa"))
+nice(wsls_model)
+
+# with full random effects: singular fit
+# removed interactions between random slopes - still singular fit 
+# removed trial number random slope
+
+
+# significant effects of:
+# age
+# block condition
+# block number
+# age x block condition
+# trial x block condition
+# block condition x block number
+# age x trial x block condition
+```
+
+```{r display WSLS model}
+wsls_model.glmer <- mixed(WSLS ~ age_scaled * learning_trial_scaled * reward_condition * block_number_scaled  + (reward_condition + block_number_scaled || subject_id),
+                    data = wsls_model_data,
+                    family = "binomial",
+                    method = "LRT",
+                    expand_re = T,
+                    control = glmerControl(optimizer = "bobyqa"),
+                    return = "merMod")
+                    
+tab_model(wsls_model.glmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+
+## Stats: WSLS in first 10 trials
+```{r WSLS means in first 10 trials}
+win_stay_lose_shift_first10_means <- learning_data %>%
+    filter(same_stim == 0) %>% #different stim only
+    mutate(WSLS = case_when(prior_cat_correct_response_made == 1 & category_stay == 1 ~ 1, 
+                            prior_cat_correct_response_made == 1 & category_stay == 0 ~ 0,
+                            prior_cat_correct_response_made == 0 & category_stay == 1 ~ 0, 
+                            prior_cat_correct_response_made == 0 & category_stay == 0 ~ 1)) %>%
+    group_by(subject_id, age_group, reward_condition, prior_cat_correct_response_made) %>%
+    filter(learning_trial < 10) %>%
+    group_by(reward_condition) %>%
+    summarize(mean_WSLS = mean(WSLS, na.rm = T),
+              se_WSLS = se(WSLS)) %>%
+    drop_na()
+
+pander(win_stay_lose_shift_first10_means)
+```
+
+
+# Memory
+```{r import and format memory data}
+
+#combine and process
+memory_data <-  read_csv('data/e1_memory_data.csv') %>%
+    filter(task_block != "practice") %>%
+    filter(is.na(mem_acc) == F)
+
+#relabel foil type and reward condition
+memory_data$foil_type <- factor(memory_data$foil_type, levels = c("old", "exemplar", "category"),
+                                  labels = c("Old", "Novel Exemplar", "Novel Category"))
+
+memory_data$reward_condition <- factor(memory_data$block_condition,
+                                            levels = c(1, 2),
+                                            labels = c("Category-Predictive", "Exemplar-Predictive"))
+
+#combine with subject ages
+memory_data <- inner_join(memory_data, subject_list, by = c("subject_id"))
+```
+
+## Memory delay stats
+```{r memory delay stats}
+mem_delay_overall_data <- memory_data %>%
+    select(subject_id, age_group, memory_delay) %>%
+    unique() %>%
+    summarize(mean_delay = mean(memory_delay, na.rm = T),
+              sd_delay = sd(memory_delay, na.rm = T),
+              min_delay = min(memory_delay, na.rm = T),
+              max_delay = max(memory_delay, na.rm = T))
+pander(mem_delay_overall_data)
+
+mem_delay_data <- memory_data %>%
+    select(subject_id, age_group, memory_delay) %>%
+    unique() %>%
+    group_by(age_group) %>%
+    summarize(mean_delay = mean(memory_delay, na.rm = T),
+              sd_delay = sd(memory_delay, na.rm = T),
+              min_delay = min(memory_delay, na.rm = T),
+              max_delay = max(memory_delay, na.rm = T))
+pander(mem_delay_data)
+```
+
+
+
+## Supplementary Figure: AUC values by stimulus repetitions, block condition, age group
+```{r data processing for plotting memory AUC by stimulus repetition}
+one_rep_AUCs <- memory_data %>%
+    filter(num_stim_rep %in% c(NA, 1)) %>%
+    select(subject_id, memory_delay, age_group, reward_condition, correct_mem_response, conf_rating, num_stim_rep) %>%
+    group_by(subject_id, memory_delay, age_group, reward_condition) %>%
+    mutate(one_rep = as.numeric(roc(correct_mem_response ~ conf_rating)$auc)) %>%
+    select(subject_id, memory_delay, reward_condition, one_rep) %>%
+    unique()
+
+three_rep_AUCs <- memory_data %>%
+    filter(num_stim_rep %in% c(NA, 3)) %>%
+    select(subject_id, memory_delay, age_group, reward_condition, correct_mem_response, conf_rating, num_stim_rep) %>%
+    group_by(subject_id, memory_delay, age_group, reward_condition) %>%
+    mutate(three_rep = as.numeric(roc(correct_mem_response ~ conf_rating)$auc)) %>%
+    select(subject_id, memory_delay, reward_condition, three_rep) %>%
+    unique()
+
+six_rep_AUCs <- memory_data %>%
+    filter(num_stim_rep %in% c(NA, 6)) %>%
+    select(subject_id, memory_delay, age_group, reward_condition, correct_mem_response, conf_rating, num_stim_rep) %>%
+    group_by(subject_id, memory_delay, age_group, reward_condition) %>%
+    mutate(six_rep = as.numeric(roc(correct_mem_response ~ conf_rating)$auc)) %>%
+    select(subject_id, memory_delay, reward_condition, six_rep) %>%
+    unique()
+
+#combine AUCs into single data frame
+stim_rep_AUCs <- full_join(one_rep_AUCs, three_rep_AUCs, by = c("subject_id", "memory_delay", "reward_condition"))
+stim_rep_AUCs <- full_join(stim_rep_AUCs, six_rep_AUCs, by = c("subject_id", "memory_delay", "reward_condition")) %>%
+    pivot_longer(cols = c(one_rep, three_rep, six_rep),
+                 names_to = "stimulus_reps",
+                 values_to = "AUC")
+
+stim_rep_AUCs$stimulus_reps <- factor(stim_rep_AUCs$stimulus_reps,
+                                      levels = c("one_rep", "three_rep", "six_rep"),
+                                      labels = c(1, 3, 6))
+```
+
+```{r plot auc by stim rep}
+stim_rep_auc_means <- stim_rep_AUCs %>%
+    group_by(age_group, stimulus_reps, reward_condition) %>%
+    summarize(mean_auc = mean(AUC, na.rm = T),
+              se_auc = se(AUC))
+
+stim_rep_auc_plot <- ggplot(stim_rep_AUCs, aes(x = stimulus_reps, fill = reward_condition, y = AUC)) +
+    geom_boxplot(alpha = .7) +
+    facet_grid(cols = vars(age_group)) +
+    scale_fill_manual(values = c(color1, color2), name = "Block Condition") + 
+    xlab("Number of Stimulus Repetitions") +
+    ylab("Memory Performance (AUC)") +
+    mem_theme
+stim_rep_auc_plot
+```
+
+
+## Model: AUC values by stimulus repetitions, block condition, age
+```{r fit auc by stim rep model}
+
+stim_rep_aucs <- full_join(stim_rep_AUCs, subject_list, by = c("subject_id", "age_group")) 
+
+#scale variables
+stim_rep_aucs$age_scaled <- scale_this(stim_rep_aucs$age)
+stim_rep_aucs$memory_delay_scaled <- scale_this(stim_rep_aucs$memory_delay)
+stim_rep_aucs$stim_rep_scaled <- scale_this(as.numeric(as.character(stim_rep_aucs$stimulus_reps)))
+
+#run model
+stim_rep_auc_model <- mixed(AUC ~ age_scaled * reward_condition * stim_rep_scaled + (1|subject_id),
+                   data = stim_rep_aucs,
+                   method = "S")
+nice(stim_rep_auc_model)
+
+# effects of
+# reward condition
+# stimulus repetition
+# age
+```
+
+```{r display auc by stim rep model}
+stim_rep_auc_model.lmer <- mixed(AUC ~ age_scaled * reward_condition * stim_rep_scaled + (1|subject_id),
+                   data = stim_rep_aucs,
+                   method = "S",
+                   return = "merMod")
+                    
+tab_model(stim_rep_auc_model.lmer,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+
+```{r fit ROC curves for each participant and derive AUC}
+exemplar_AUCs <- memory_data %>%
+    filter(foil_type != "Novel Category") %>%
+    select(subject_id, memory_delay, age_group, reward_condition, correct_mem_response, conf_rating) %>%
+    group_by(subject_id, memory_delay, age_group, reward_condition) %>%
+    mutate(exemplar = as.numeric(roc(correct_mem_response ~ conf_rating)$auc)) %>%
+    select(subject_id, memory_delay, reward_condition, exemplar) %>%
+    unique()
+
+category_AUCs <- memory_data %>%
+    filter(foil_type != "Novel Exemplar") %>%
+    select(subject_id, memory_delay, age_group, reward_condition, correct_mem_response, conf_rating) %>%
+    group_by(subject_id, memory_delay, age_group, reward_condition) %>%
+    mutate(category = as.numeric(roc(correct_mem_response ~ conf_rating)$auc)) %>%
+    select(subject_id, memory_delay, reward_condition, category) %>%
+    unique()
+
+
+#combine AUCs into single data frame
+participant_AUCs <- full_join(exemplar_AUCs, category_AUCs, by = c("subject_id", "memory_delay", "age_group", "reward_condition")) %>%
+    pivot_longer(cols = c(exemplar, category),
+                 names_to = "foil_type",
+                 values_to = "AUC")
+
+```
+
+## Figure 3A: AUC values by age group, memory specificity, block condition
+```{r auc plot, fig.height = 8}
+auc_means <- participant_AUCs %>%
+    group_by(age_group, foil_type, reward_condition) %>%
+    summarize(mean_auc = mean(AUC, na.rm = T),
+              se_auc = se(AUC))
+
+auc_plot <- ggplot(participant_AUCs) +
+    facet_grid(cols = vars(age_group), rows = vars(foil_type)) +
+        geom_hline(yintercept = .5, linetype = "dashed") +
+       geom_point(data = participant_AUCs, aes(x = reward_condition, color = foil_type, y = AUC), shape = 95, size = 20, alpha = .2) + 
+    geom_point(data = auc_means, aes(x = reward_condition, y = mean_auc), color = "black", size = 2) +
+    geom_errorbar(data = auc_means, aes(x = reward_condition, y = mean_auc, ymin = mean_auc - se_auc, ymax = mean_auc + se_auc), color = "black", width = .1) +
+    geom_line(data = auc_means, aes(x = reward_condition, y = mean_auc, group = age_group), color = "black", linewidth = .5) +
+    scale_color_manual(values = c(color1, color2), name = "Block Condition") +
+    xlab("Block Condition") +
+    ylab("Memory Performance (AUC)") +
+    scale_y_continuous(limits = c(.3, 1), breaks = c(.3, .5, .7, .9)) +
+    mem_theme +
+    theme(axis.text.x = element_text(angle = 50, hjust = 1),
+          legend.position = "none")
+auc_plot
+```
+
+## Model: AUCs by age, reward condition, memory specificity
+```{r fit auc model}
+aucs <- full_join(participant_AUCs, subject_list, by = c("subject_id", "age_group")) 
+
+#scale variables
+aucs$age_scaled <- scale_this(aucs$age)
+
+#run model
+auc_model <- mixed(AUC ~ age_scaled * reward_condition * foil_type + (1|subject_id),
+                   data = aucs,
+                   method = "S")
+nice(auc_model)
+# main effects of
+# age
+# reward condition
+# foil type
+```
+
+```{r display auc model}
+auc_model.lmer <- mixed(AUC ~ age_scaled * reward_condition * foil_type + (1|subject_id),
+                   data = aucs,
+                   method = "S",
+                   return = "merMod")
+
+tab_model(auc_model.lmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+
+## Model: AUCs by age, reward condition, foil type, memory delay
+```{r fit auc model with memory delay}
+
+aucs_delay <- aucs %>%
+    drop_na()
+
+#scale variables
+aucs_delay$age_scaled <- scale_this(aucs_delay$age)
+aucs_delay$memory_delay_scaled <- scale_this(aucs_delay$memory_delay)
+
+
+#run model
+auc_delay_model <- mixed(AUC ~ age_scaled * reward_condition * foil_type * memory_delay_scaled + (1|subject_id),
+                   data = aucs_delay,
+                   method = "S")
+nice(auc_delay_model)
+
+# main effects of
+# reward condition
+# foil type
+# memory delay
+# age x memory delay
+```
+
+```{r display auc model with memory delay}
+auc_delay_model.lmer <-  mixed(AUC ~ age_scaled * reward_condition * foil_type * memory_delay_scaled + (1|subject_id),
+                   data = aucs_delay,
+                   method = "S",
+                   return = "merMod")
+
+tab_model(auc_delay_model.lmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+## Supplementary Figure: AUC values with delay
+```{r auc plot with delay}
+participant_AUCs_filtered <- participant_AUCs %>%
+     filter(memory_delay > 5 & memory_delay < 10)
+
+auc_plot <- ggplot(participant_AUCs_filtered, aes(x = as.factor(memory_delay), fill = foil_type, y = AUC)) +
+    geom_boxplot(alpha = .7) +
+    scale_fill_manual(values = c(color1, color2), name = "Memory Specificity") + 
+    xlab("Memory Delay (Days)") +
+    ylab("Memory Performance (AUC)") +
+    coord_cartesian(ylim = c(.5, 1)) +
+    mem_theme
+auc_plot
+```
+
+
+# RL modeling
+
+## Choice weights 
+```{r cbm parameter ests fourB_oneQ}
+
+#read in param ests
+param_ests <- read_csv("data/model_estimates/params_fourB_oneQ.csv")
+
+#merge with age
+param_ests <- full_join(param_ests, subject_list, by = c("subject_id"))
+```
+
+### Figure 2E: Distribution of choice weights
+```{r beta histogram, fig.width = 7, fig.height = 5}
+
+#pivot longer
+beta_ests <- param_ests %>%
+    pivot_longer(cols = c(beta_c_cCond: beta_e_eCond),
+                 names_to = "beta_parameter",
+                 names_prefix = "beta_",
+                 values_to = "est") %>%
+    separate(beta_parameter, into = c("beta_val", "block_condition"), sep = "_") %>%
+    drop_na()
+
+beta_ests$abstraction <- factor(beta_ests$beta_val,
+                                levels = c("c", "e"),
+                                labels = c("category", "exemplar"))
+
+beta_ests$reward_condition <- factor(beta_ests$block_condition,
+                                levels = c("cCond", "eCond"),
+                                labels = c("Category-Predictive", "Exemplar-Predictive"))
+
+#find means to add to plot
+beta_means <- beta_ests %>%
+    group_by(reward_condition, abstraction, age_group) %>%
+    summarize(mean_est = mean(est, na.rm = T))
+
+#plot
+beta_histogram <- ggplot(beta_ests, aes(x = est)) +
+    facet_grid(rows = vars(abstraction), cols = vars(age_group)) + 
+    geom_histogram(position = "identity", color = 'black', aes(fill = reward_condition), alpha = .4) +
+    geom_vline(data = beta_means, aes(xintercept = mean_est, color = reward_condition), linewidth = 2) + 
+    xlab("Choice Weight Magnitude") +
+    ylab("Number of Participants") +
+    scale_y_continuous(breaks = c(0, 3, 6, 9)) +
+    scale_fill_manual(values = c(color1, color2), name = "Block Condition") +
+    scale_color_manual(values = c(color1, color2), name = "Block Condition") +
+    mem_theme +
+    theme(legend.position = "top")
+beta_histogram
+```
+
+
+### Model: Choice weights by block condition and age
+```{r fit choice weight by age model}
+
+#scale age
+beta_ests$age_scaled <- scale_this(beta_ests$age)
+
+#do betas change across conditions and by age?
+beta.age.model <- mixed(est ~ abstraction * reward_condition * age_scaled + (1|subject_id),
+                            method = "S",
+                           data = beta_ests)
+nice(beta.age.model) 
+```
+
+```{r display choice weight by age model}
+beta.age.model.lmer <- mixed(est ~ abstraction * reward_condition * age_scaled + (1|subject_id),
+                            method = "S",
+                           data = beta_ests,
+                           return = "merMod")
+
+tab_model(beta.age.model.lmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+
+
+### Model: Exemplar choice weights across conditions
+```{r fit exemplar choice weight across conditions model}
+
+#filter and scale age
+exemp_beta_ests <- beta_ests %>%
+    filter(abstraction == "exemplar")
+
+#do exemplar choice weights change across conditions?
+beta.model.exemp <- mixed(est ~ reward_condition + (1|subject_id),
+                            method = "S",
+                           data = exemp_beta_ests)
+nice(beta.model.exemp) 
+```
+
+```{r display exemplar choice weight by age model}
+beta.age.model.exemp.lmer <- mixed(est ~ reward_condition + (1|subject_id),
+                                   method = "S",
+                                   data = exemp_beta_ests,
+                                   return = "merMod")
+
+tab_model(beta.age.model.exemp.lmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+
+### Model: Category choice weights across conditions
+```{r fit category choice weight  model}
+#filter and scale age
+cat_beta_ests <- beta_ests %>%
+    filter(abstraction == "category")
+
+#do betas change across conditions and by age?
+beta.age.model.cat <- mixed(est ~ reward_condition + (1|subject_id),
+                            method = "S",
+                           data = cat_beta_ests)
+nice(beta.age.model.cat) 
+
+# reward condition
+# reward condition x age interaction
+```
+
+```{r display category choice weight model}
+beta.age.model.cat.lmer <- mixed(est ~ reward_condition  + (1|subject_id),
+                                   method = "S",
+                                   data = cat_beta_ests,
+                                   return = "merMod")
+
+tab_model(beta.age.model.cat.lmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+
+
+### Relations between choice weights and points earned
+```{r choice weights points data processing}
+participant_points <- learning_data %>%
+    group_by(subject_id, reward_condition) %>%
+    summarize(total_points = sum(points, na.rm = T)) 
+
+#convert subject_id to factor
+beta_ests$subject_id <- factor(beta_ests$subject_id)
+
+#join
+beta_ests_points <- full_join(participant_points, beta_ests, by = c("subject_id", "reward_condition"))
+```
+
+```{r fit choice weights points model}
+
+#drop na
+beta_ests_points <- beta_ests_points %>%
+    select(est, total_points, age, age_group, abstraction, reward_condition, subject_id) %>%
+    drop_na()
+
+#scale
+beta_ests_points$beta_scaled <- scale_this(beta_ests_points$est)
+beta_ests_points$age_scaled <- scale_this(beta_ests_points$age)
+
+#do beta values predict points?
+beta_points_model <- mixed(total_points ~ age_scaled * beta_scaled * abstraction * reward_condition + (1|subject_id),
+                           data = beta_ests_points)
+beta_points_model
+
+# effects of 
+# age
+# beta
+# age x beta
+# abstraction x block condition x beta
+```
+
+```{r fit separate regressions to look at how exemplar and category choice weights influence points across conditions}
+
+#drop na
+beta_ests_points_c_c <- beta_ests_points %>%
+    filter(reward_condition == "Category-Predictive",
+           abstraction == "category")
+
+beta_ests_points_e_c <- beta_ests_points %>%
+    filter(reward_condition == "Category-Predictive",
+           abstraction == "exemplar")
+
+beta_ests_points_c_e <- beta_ests_points %>%
+    filter(reward_condition == "Exemplar-Predictive",
+           abstraction == "category")
+
+beta_ests_points_e_e <- beta_ests_points %>%
+    filter(reward_condition == "Exemplar-Predictive",
+           abstraction == "exemplar")
+
+#do beta values predict points?
+beta_points_model1 <- lm(total_points ~ est, data = beta_ests_points_c_c)
+beta_points_model2 <- lm(total_points ~ est, data = beta_ests_points_e_c)
+beta_points_model3 <- lm(total_points ~ est, data = beta_ests_points_c_e)
+beta_points_model4 <- lm(total_points ~ est, data = beta_ests_points_e_e)
+
+summary(beta_points_model1) #sig
+summary(beta_points_model2) #sig
+summary(beta_points_model3) #not sig
+summary(beta_points_model4) #sig
+```
+
+### Figure 2D: Effect of choice weights on points earned
+```{r points and choice weights plot, fig.height = 5}
+points_beta_plot <- ggplot(beta_ests_points, aes(x = est, y = total_points, color = abstraction)) +
+    facet_grid(cols = vars(reward_condition)) +
+    geom_point() +
+    geom_smooth(method = "lm", aes(fill = abstraction)) +
+    scale_color_manual(values = c(color1, color2), name = "Choice Weight") + 
+    scale_fill_manual(values = c(color1, color2), name = "Choice Weight") +
+    ylab("Total Points Earned") +
+    xlab("Choice Weight Magnitude") +
+    mem_theme +
+    theme(legend.position = "top")
+points_beta_plot
+```
+
+
+# Relations between learning and memory
+
+## Do points earned during learning relate to memory?
+```{r auc points data processing}
+
+#select relevant variables from beta_ests_points
+points_earned <- beta_ests_points %>%
+    select(total_points, subject_id, reward_condition) %>%
+    unique()
+
+#select relevant variables from memory data
+temp <- aucs %>%
+    select(subject_id, memory_delay, reward_condition, abstraction = foil_type, age_group, age, AUC)
+
+#convert subject id to factor
+temp$subject_id <- factor(temp$subject_id)
+
+#join data
+auc_beta_points <- full_join(temp, points_earned, by = c("subject_id", "reward_condition"))
+```
+
+### Model: AUC by points earned 
+```{r fit auc points model}
+
+#does the number of points participants earned in each block relate to memory performance?
+auc_beta_points$age_scaled <-scale_this(auc_beta_points$age)
+auc_beta_points$points_scaled  <-scale_this(auc_beta_points$total_points)
+
+auc_beta_points_model <- mixed(AUC ~ age_scaled * points_scaled * abstraction * reward_condition + (1|subject_id),
+                                  method = "S",
+                                  data = auc_beta_points)
+nice(auc_beta_points_model) 
+summary(auc_beta_points_model)
+
+# Effects
+# points
+# abstraction
+# reward condition
+# points x abstraction x reward condition
+```
+
+```{r display auc points model}
+
+auc_beta_points_model.lmer <- mixed(AUC ~ age_scaled * points_scaled * abstraction * reward_condition + (1|subject_id),
+                                  method = "S",
+                                  data = auc_beta_points,
+                                  return = "merMod")
+
+tab_model(auc_beta_points_model.lmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+
+### Figure 3B: AUC by performance group and reward condition
+```{r auc points participant plot, fig.height = 8, fig.width = 6}
+
+auc_beta_points <- auc_beta_points %>%
+    group_by(reward_condition) %>%
+    mutate(performance_group = ntile(total_points, 2))
+
+auc_beta_points$performance_group <-
+    factor(
+        auc_beta_points$performance_group,
+        levels = c(1, 2),
+        labels = c("low point-earners", "high point-earners")
+    )
+
+auc_beta_points_means <- auc_beta_points %>%
+    group_by(performance_group, abstraction, reward_condition) %>%
+    summarize(
+        mean_auc = mean(AUC, na.rm = T),
+        N = n(),
+        se_auc = sd(AUC) / sqrt(N)
+    )
+
+#plot
+auc_points_plot <- ggplot(auc_beta_points) +
+    facet_grid(cols = vars(performance_group),
+               rows = vars(abstraction)) +
+    geom_hline(yintercept = .5, linetype = "dashed") +
+    geom_point(
+        data = auc_beta_points,
+        aes(x = reward_condition, color = abstraction, y = AUC),
+        shape = 95,
+        size = 20,
+        alpha = .2
+    ) +
+    geom_point(
+        data = auc_beta_points_means,
+        aes(x = reward_condition, y = mean_auc),
+        color = "black",
+        size = 2
+    ) +
+    geom_errorbar(
+        data = auc_beta_points_means,
+        aes(
+            x = reward_condition,
+            y = mean_auc,
+            ymin = mean_auc - se_auc,
+            ymax = mean_auc + se_auc
+        ),
+        color = "black",
+        width = .1
+    ) +
+    geom_line(
+        data = auc_beta_points_means,
+        aes(x = reward_condition, y = mean_auc, group = performance_group),
+        color = "black",
+        linewidth = .5
+    ) +
+    scale_color_manual(values = c(color1, color2), name = "Block Condition") +
+    xlab("Block Condition") +
+    ylab("Memory Performance (AUC)") +
+    scale_y_continuous(limits = c(.3, 1), breaks = c(.3, .5, .7, .9)) +
+    mem_theme +
+    theme(axis.text.x = element_text(angle = 50, hjust = 1),
+          legend.position = "none")
+auc_points_plot
+```
+
+
+## Do choice weights relate to memory?
+```{r auc beta data processing}
+
+#select relevant beta variables
+beta_ests_mem <- beta_ests %>%
+    select(subject_id, reward_condition, abstraction, est)
+
+#select relevant memory variables
+temp <- aucs %>%
+    select(subject_id, memory_delay, reward_condition, abstraction = foil_type, age_group, age, AUC)
+
+```
+
+### Model: AUC by age, exemplar choice weights, specificity, block condition 
+```{r fit auc exemplar choice weights model}
+
+#get exemplar weights
+exemplar_weights <- beta_ests_mem %>%
+    filter(abstraction == "exemplar") %>%
+    select(subject_id, reward_condition, est)
+
+temp$subject_id <- factor(temp$subject_id)
+
+#join data
+auc_beta_exemplar <- full_join(temp, exemplar_weights, by = c("subject_id", "reward_condition"))
+
+#scale relevant variables
+auc_beta_exemplar$age_scaled <-scale_this(auc_beta_exemplar$age)
+auc_beta_exemplar$beta_scaled <-scale_this(auc_beta_exemplar$est)
+
+#fit model
+auc_beta_exemplar_model <- mixed(AUC ~ age_scaled * beta_scaled * abstraction * reward_condition + (1|subject_id),
+                                  method = "S",
+                                  data = auc_beta_exemplar)
+nice(auc_beta_exemplar_model)
+
+#effects of:
+# beta
+# abstraction
+# reward condition
+# age x beta
+# beta x reward condition
+# age x beta x reward condition
+
+```
+
+```{r display auc exemplar choice weights model}
+
+auc_beta_exemplar_model.lmer <- mixed(AUC ~ age_scaled * beta_scaled * abstraction * reward_condition + (1|subject_id),
+                                  method = "S",
+                                  data = auc_beta_exemplar,
+                                  return = "merMod")
+
+tab_model(auc_beta_exemplar_model.lmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+## Figure 3C: AUC by exemplar choice weights - model effects
+```{r plot auc by exemplar choice weights model effects, fig.width = 10}
+
+sjPlot::set_theme( 
+    base = theme_classic(),
+    legend.item.backcol = "transparent",
+    geom.boxoutline.color = "black",
+    axis.textsize = 1,
+    axis.textcolor = "black",
+    axis.title.color = "black",
+    axis.title.size = 1.1,
+    axis.title.x.vjust = -.25,
+    axis.title.y.vjust = 1,
+    legend.title.size = 1.05)
+
+plot_model(auc_beta_exemplar_model.lmer, type = "pred",
+           terms = c("beta_scaled", "age_scaled", "reward_condition", "abstraction"),
+           colors = c("#FFCA4B", "#6364a5", "#45b5aa")) +
+    scale_color_manual(values = c(color1, color2, color3), name = "Age",
+                       labels = c("~ 11 years old",
+                                  "~ 16 years old",
+                                  "~ 21 years old"
+                                  )) +
+        scale_fill_manual(values = c(color1, color2, color3), name = "Age",
+                       labels = c("~ 11 years old",
+                                  "~ 16 years old",
+                                  "~ 21 years old"
+                                  )) 
+```
+
+
+## Model: AUC by age, category choice weights, specificity, block condition 
+```{r fit auc category choice weights model}
+
+#get relevant variables
+cat_weights <- beta_ests_mem %>%
+    filter(abstraction == "category") %>%
+    select(subject_id, reward_condition, est)
+
+#join data
+auc_beta_cat <- full_join(temp, cat_weights, by = c("subject_id", "reward_condition")) 
+
+#scale
+auc_beta_cat$age_scaled <-scale_this(auc_beta_cat$age)
+auc_beta_cat$beta_scaled <-scale_this(auc_beta_cat$est)
+
+#fit model
+auc_beta_cat_model <- mixed(AUC ~ age_scaled * beta_scaled * abstraction * reward_condition + (1|subject_id),
+                                  method = "S",
+                                  data = auc_beta_cat)
+nice(auc_beta_cat_model)
+
+# effects of:
+# age 
+# abstraction
+# reward condition
+# beta x abstraction
+
+```
+
+```{r display auc category choice weights model}
+
+auc_beta_cat_model.lmer <- mixed(AUC ~ age_scaled * beta_scaled * abstraction * reward_condition + (1|subject_id),
+                                  method = "S",
+                                  data = auc_beta_cat,
+                                  return = "merMod")
+
+tab_model(auc_beta_cat_model.lmer,
+          digits = 4,
+          show.intercept = F,
+          show.est = T,
+          show.ci = F,
+          show.se = T,
+          show.stat = F,
+          show.p = F,
+          string.se = "SE")
+```
+
+
+
+## Figure 3C: AUC by category choice weights: model effects
+```{r plot auc by cat choice weights model effects, fig.width = 10}
+
+sjPlot::set_theme( 
+    base = theme_classic(),
+    legend.item.backcol = "transparent",
+    geom.boxoutline.color = "black",
+    axis.textsize = 1,
+    axis.textcolor = "black",
+    axis.title.color = "black",
+    axis.title.size = 1.1,
+    axis.title.x.vjust = -.25,
+    axis.title.y.vjust = 1,
+    legend.title.size = 1.05)
+
+plot_model(auc_beta_cat_model.lmer, type = "pred",
+           terms = c("beta_scaled", "age_scaled", "reward_condition", "abstraction"),
+           colors = c("#FFCA4B", "#6364a5", "#45b5aa")) +
+    scale_color_manual(values = c(color1, color2, color3), name = "Age",
+                       labels = c("~ 11 years old",
+                                  "~ 16 years old",
+                                  "~ 21 years old"
+                                  )) +
+        scale_fill_manual(values = c(color1, color2, color3), name = "Age",
+                       labels = c("~ 11 years old",
+                                  "~ 16 years old",
+                                  "~ 21 years old"
+                                  )) 
+```
+
+
+# Relations between age and other model parameters
+
+## Model: Initial Q values by age
+```{r initial Q values by age model}
+
+#scale age
+param_ests$age_scaled <- scale_this(param_ests$age)
+
+#run model
+q_init_model <- lm(q_init ~ age_scaled, data = param_ests)
+pander(summary(q_init_model))
+
+#significant effect of age
+```
+
+## Supplementary Figure: Initial Q values by age
+```{r plot initial Q values, fig.width = 4}
+
+initial_q_plot <- ggplot(param_ests, aes(x = age, y = q_init)) +
+    geom_point(color = color3) +
+    geom_smooth(method = "lm", color = "black", fill = "black") +
+    xlab("Age (Years)") +
+    ylab("Initial Q Value") +
+    mem_theme
+initial_q_plot   
+```
+
+
+## Model: Alpha values by age
+```{r alpha values by age model}
+
+#run model
+alpha_model <- lm(alpha ~ age_scaled, data = param_ests)
+pander(summary(alpha_model))
+
+#no effect of age
+```
